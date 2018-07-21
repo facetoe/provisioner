@@ -33,6 +33,9 @@ class Graph:
                 return False
         return True
 
+    def percent_complete(self):
+        return sum((1 for n in self.graph.nodes() if n.state == State.COMPLETE)) * 100 / len(self.graph)
+
     def draw(self, path):
         agraph = nx.nx_agraph.to_agraph(self.graph)
         agraph.layout('dot', args='-Nfontsize=10 -Nwidth=".2" -Nheight=".2" -Nmargin=0 -Gfontsize=8')
