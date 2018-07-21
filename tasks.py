@@ -21,6 +21,7 @@ class Task:
         time.sleep(randint(1, 5))
         print(" {} - complete".format(self.id))
         self.state = State.COMPLETE
+        return self
 
     def __str__(self):
         return self.id
