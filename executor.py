@@ -10,7 +10,9 @@ cluster = AWSGraph(3, 1)
 cluster.draw('/tmp/test-cluster.jpg')
 
 while not cluster.provisioned():
+    futures = list()
     for task in cluster.runnable_tasks():
         task.state = State.RUNNING
-        pool.submit(task)
+        futures.append(pool.submit(task))
+
     time.sleep(1)
