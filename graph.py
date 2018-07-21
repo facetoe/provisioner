@@ -43,44 +43,45 @@ class AWSGraph(Graph):
     def build(self, num_nodes: int, num_dcs: int) -> Tuple[nx.DiGraph, Task]:
         task_graph = nx.DiGraph()
 
-        dc = DataCentre(task_graph)
         cluster = Cluster(task_graph)
-        role = Role(task_graph)
-        vpc = VPC(task_graph)
-        security_groups = SecurityGroups(task_graph)
-        internet_gateway = InternetGateway(task_graph)
-        route_table = RouteTable(task_graph)
-        subnets = SubNets(task_graph)
-        firewall_rules = FirewallRules(task_graph)
+        for _ in range(num_dcs):
+            dc = DataCentre(task_graph)
+            role = Role(task_graph)
+            vpc = VPC(task_graph)
+            security_groups = SecurityGroups(task_graph)
+            internet_gateway = InternetGateway(task_graph)
+            route_table = RouteTable(task_graph)
+            subnets = SubNets(task_graph)
+            firewall_rules = FirewallRules(task_graph)
 
-        cluster_edges = [
-            (cluster, dc),
-            (dc, role),
-            (dc, vpc),
-            (vpc, security_groups),
-            (vpc, internet_gateway),
-            (vpc, route_table),
-            (internet_gateway, route_table),
-            (vpc, subnets),
-            (vpc, security_groups),
-            (security_groups, firewall_rules),
-        ]
+            cluster_edges = [
+                (cluster, dc),
+                (dc, role),
+                (dc, vpc),
+                (vpc, security_groups),
+                (vpc, internet_gateway),
+                (vpc, route_table),
+                (internet_gateway, route_table),
+                (vpc, subnets),
+                (vpc, security_groups),
+                (security_groups, firewall_rules),
+            ]
 
-        for n in range(0, num_nodes):
-            create_instance = CreateInstance(task_graph)
-            create_ebs = CreateEBS(task_graph)
-            attach_ebs = AttachEBS(task_graph)
+            for n in range(num_nodes):
+                create_instance = CreateInstance(task_graph)
+                create_ebs = CreateEBS(task_graph)
+                attach_ebs = AttachEBS(task_graph)
 
-            cluster_edges.append((dc, create_instance))
-            cluster_edges.append((dc, create_ebs))
+                cluster_edges.append((dc, create_instance))
+                cluster_edges.append((dc, create_ebs))
 
-            cluster_edges.append((create_ebs, attach_ebs))
-            cluster_edges.append((create_instance, attach_ebs))
-            cluster_edges.append((create_instance, BindIP(task_graph)))
+                cluster_edges.append((create_ebs, attach_ebs))
+                cluster_edges.append((create_instance, attach_ebs))
+                cluster_edges.append((create_instance, BindIP(task_graph)))
 
-            bind_security_group = BindSecurityGroup(task_graph)
-            cluster_edges.append((create_instance, bind_security_group))
-            cluster_edges.append((security_groups, bind_security_group))
+                bind_security_group = BindSecurityGroup(task_graph)
+                cluster_edges.append((create_instance, bind_security_group))
+                cluster_edges.append((security_groups, bind_security_group))
 
-        task_graph.add_edges_from(cluster_edges)
+            task_graph.add_edges_from(cluster_edges)
         return task_graph, cluster
