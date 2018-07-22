@@ -1,34 +1,52 @@
 import time
+from abc import abstractmethod
 from enum import Enum
 from random import randint
 
 
+class ExecutionException(Exception):
+    def __init__(self, task, exception):
+        super().__init__()
+        self.task = task
+        self.exception = exception
+
+
 class State(Enum):
     PENDING = 'PENDING'
-    RUNNING = 'RUNNING'
+    EXECUTING = 'EXECUTING'
     COMPLETE = 'COMPLETE'
     FAILED = 'FAILED'
 
 
 class Task:
-    def __init__(self, graph, name):
+    def __init__(self, graph):
         self.graph = graph
-        self.id = "{}-{}".format(name, id(self))
+        self.id = "{}-{}".format(type(self).__name__, id(self))
         self.state = State.PENDING
 
-    def __call__(self, *args, **kwargs):
-        print(" {} - running".format(self.id))
-        time.sleep(randint(1, 5))
-        print(" {} - complete".format(self.id))
+    @abstractmethod
+    def run(self):
+        if randint(0, 10) % 5 == 0:
+            raise Exception("I FAILED")
+        time.sleep(randint(0, 10))
         self.state = State.COMPLETE
-        return self
+        pass
+
+    def __call__(self, *args, **kwargs):
+        try:
+            self.state = State.EXECUTING
+            self.run()
+            return self
+        except Exception as e:
+            self.state = State.FAILED
+            raise ExecutionException(self, e)
 
     def __str__(self):
         return self.id
 
     def __repr__(self):
-        return "{}(id='{}', runnable={}, state={})".format(type(self).__name__, self.id, self.runnable,
-                                                           self.state)
+        return "{}(id='{}', runnable={}, state={})".format(
+            type(self).__name__, self.id, self.runnable, self.state)
 
     @property
     def runnable(self):
@@ -45,77 +63,89 @@ class Task:
     def predecessors(self):
         return self.graph.predecessors(self)
 
+    def reset_failed(self):
+        self.state = State.PENDING
+
+    def failed(self):
+        return self.state == State.FAILED
+
+    def running(self):
+        return self.state == State.FAILED
+
+    def pending(self):
+        return self.state == State.PENDING
+
 
 class DataCentre(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'datacentre')
+        super().__init__(graph)
 
 
 class Cluster(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'cluster')
+        super().__init__(graph)
 
 
 class Role(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'role')
+        super().__init__(graph)
 
 
 class VPC(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'vpc')
+        super().__init__(graph)
 
 
 class SecurityGroups(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'security_groups')
+        super().__init__(graph)
 
 
 class BindSecurityGroup(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'bind_security_group')
+        super().__init__(graph)
 
 
 class InternetGateway(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'internet_gateway')
+        super().__init__(graph)
 
 
 class RouteTable(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'route_table')
+        super().__init__(graph)
 
 
 class SubNets(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'subnets')
+        super().__init__(graph)
 
 
 class FirewallRules(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'firewall_rules')
+        super().__init__(graph)
 
 
 class CreateEBS(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'create_ebs')
+        super().__init__(graph)
 
 
 class AttachEBS(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'attach_ebs')
+        super().__init__(graph)
 
 
 class Nodes(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'nodes')
+        super().__init__(graph)
 
 
 class CreateInstance(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'create_instance')
+        super().__init__(graph)
 
 
 class BindIP(Task):
     def __init__(self, graph):
-        super().__init__(graph, 'bind_ip')
+        super().__init__(graph)

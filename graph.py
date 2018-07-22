@@ -1,4 +1,3 @@
-from abc import abstractmethod
 from typing import Tuple
 
 import networkx as nx
@@ -18,23 +17,36 @@ class Graph:
         return self._gather_runnable(self.root)
 
     def _gather_runnable(self, root):
-        runnable = []
+        runnable = set()
         if root.runnable:
-            runnable.append(root)
+            runnable.add(root)
         for node in self.graph.successors(root):
             if node.runnable:
-                runnable.append(node)
-            runnable.extend(self._gather_runnable(node))
-        return set(runnable)
+                runnable.add(node)
+            runnable.update(self._gather_runnable(node))
+        return runnable
 
-    def provisioned(self):
+    def complete(self):
         for node in self.graph.nodes():
             if node.state != State.COMPLETE:
                 return False
         return True
 
+    def nodes_for_state(self, state):
+        nodes = []
+        for node in self.graph.nodes():
+            if node.state == state:
+                nodes.append(node)
+        return nodes
+
+    def info(self):
+        pending = len(self.nodes_for_state(State.PENDING))
+        failed = len(self.nodes_for_state(State.FAILED))
+        complete = len(self.nodes_for_state(State.COMPLETE))
+        print("Pending: {}, Failed: {}, Complete: {}".format(pending, failed, complete))
+
     def percent_complete(self):
-        return sum((1 for n in self.graph.nodes() if n.state == State.COMPLETE)) * 100 / len(self.graph)
+        return len(self.nodes_for_state(State.COMPLETE)) * 100 / len(self.graph)
 
     def draw(self, path):
         agraph = nx.nx_agraph.to_agraph(self.graph)
@@ -43,7 +55,7 @@ class Graph:
 
 
 class AWSGraph(Graph):
-    def build(self, num_nodes: int, num_dcs: int) -> Tuple[nx.DiGraph, Task]:
+    def build(self, num_nodes, num_dcs):
         task_graph = nx.DiGraph()
 
         cluster = Cluster(task_graph)
