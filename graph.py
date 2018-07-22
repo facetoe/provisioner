@@ -11,17 +11,20 @@ Edge = namedtuple("Edge", "from_node to_node")
 
 
 class GraphBuilder:
-
     def __init__(self, connection):
         self.connection = connection
         self.cursor = self.connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
 
+    @abstractmethod
+    def create(self, cluster_id, num_nodes, num_dcs):
+        pass
+
     def load(self, cluster_id):
-        task_graph = nx.DiGraph()
-        node_map = self.build_node_map(cluster_id, task_graph)
+        execution_graph = nx.DiGraph()
+        node_map = self.build_node_map(cluster_id, execution_graph)
         edges = self.get_edges(cluster_id, node_map)
-        task_graph.add_edges_from(edges)
-        return task_graph
+        execution_graph.add_edges_from(edges)
+        return execution_graph
 
     def build_node_map(self, cluster_id, task_graph):
         self.cursor.execute("""
@@ -60,6 +63,9 @@ class GraphBuilder:
         for row in self.cursor:
             edges.add(Edge(from_node=node_map[row.from_node], to_node=node_map[row.to_node]))
         return edges
+
+
+class AWSGraphBuilder(GraphBuilder):
 
     def create(self, cluster_id, num_nodes, num_dcs):
         task_graph = nx.DiGraph()
@@ -118,7 +124,7 @@ class GraphBuilder:
             return task_graph
 
 
-class Graph:
+class ExecutionGraph:
     def __init__(self, graph):
         self.graph = graph
         self.root = next(nx.topological_sort(graph))
@@ -157,8 +163,8 @@ class Graph:
         pending = len(self.nodes_for_state(State.PENDING))
         failed = len(self.nodes_for_state(State.FAILED))
         complete = len(self.nodes_for_state(State.COMPLETE))
-        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}".format(self.percent_complete(), pending, failed,
-                                                                             complete)
+        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}" \
+            .format(self.percent_complete(), pending, failed, complete)
 
     def percent_complete(self):
         return len(self.nodes_for_state(State.COMPLETE)) * 100 / len(self.graph)

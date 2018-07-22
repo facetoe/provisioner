@@ -5,12 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import psycopg2.extras
 
-from graph import GraphBuilder, Graph, State
+from graph import AWSGraphBuilder, ExecutionGraph, State
 from tasks import ExecutionException
 
 connection = psycopg2.connect(dbname='testgraphdb')
 cursor = connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
-builder = GraphBuilder(connection)
+builder = AWSGraphBuilder(connection)
 
 cursor.execute("""
     INSERT INTO cluster(name)
@@ -19,11 +19,9 @@ cursor.execute("""
 """)
 
 cluster_id = cursor.fetchone().id
+g = builder.create(cluster_id, num_nodes=3, num_dcs=2)
 
-g = builder.create(cluster_id, 3, 2)
-
-graph = Graph(g)
-
+graph = ExecutionGraph(g)
 graph.draw('/tmp/test.jpg')
 
 result_queue = queue.Queue()
