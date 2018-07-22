@@ -1,3 +1,4 @@
+import logging
 from collections import namedtuple
 from typing import Tuple
 
@@ -8,6 +9,8 @@ import psycopg2.extras
 from tasks import *
 
 Edge = namedtuple("Edge", "from_node to_node")
+
+log = logging.getLogger(__name__)
 
 
 class GraphBuilder:
@@ -37,8 +40,11 @@ class GraphBuilder:
             type_map[task_type.__name__] = task_type
 
         node_map = dict()
-        for row in self.cursor:
-            node = type_map[row.type](graph=task_graph, task_id=row.id)
+        for row in list(self.cursor):
+            node = type_map[row.type](graph=task_graph, task_id=row.id, task_state=row.state)
+            if node.state == TaskState.EXECUTING:
+                log.warning("Node: {} was in the EXECUTING state on load, setting to FAILED".format(node))
+                node.set_state(self.cursor, TaskState.FAILED)
             node_map[node.id] = node
         return node_map
 
@@ -160,14 +166,15 @@ class ExecutionGraph:
         return nodes
 
     def info(self):
-        pending = len(self.nodes_for_state(State.PENDING))
-        failed = len(self.nodes_for_state(State.FAILED))
-        complete = len(self.nodes_for_state(State.COMPLETE))
-        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}" \
-            .format(self.percent_complete(), pending, failed, complete)
+        pending = len(self.nodes_for_state(TaskState.PENDING))
+        failed = len(self.nodes_for_state(TaskState.FAILED))
+        complete = len(self.nodes_for_state(TaskState.COMPLETE))
+        excecuting = len(self.nodes_for_state(TaskState.EXECUTING))
+        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}, Excecuting: {}" \
+            .format(self.percent_complete(), pending, failed, complete, excecuting)
 
     def percent_complete(self):
-        return len(self.nodes_for_state(State.COMPLETE)) * 100 / len(self.graph)
+        return len(self.nodes_for_state(TaskState.COMPLETE)) * 100 / len(self.graph)
 
     def draw(self, path):
         agraph = nx.nx_agraph.to_agraph(self.graph)

@@ -4,15 +4,10 @@ from abc import abstractmethod
 from enum import Enum
 from random import randint
 
-
-class ExecutionException(Exception):
-    def __init__(self, task, exception):
-        super().__init__()
-        self.task = task
-        self.exception = exception
+from exceptions import ExecutionException
 
 
-class State(Enum):
+class TaskState(Enum):
     PENDING = 'PENDING'
     EXECUTING = 'EXECUTING'
     COMPLETE = 'COMPLETE'
@@ -20,26 +15,26 @@ class State(Enum):
 
 
 class Task:
-    def __init__(self, graph, task_id=None):
+    def __init__(self, graph, task_id=None, task_state=None):
         self.graph = graph
         self.id = task_id
-        self._state = State.PENDING
+        self._state = TaskState(task_state) or TaskState.PENDING
 
     @abstractmethod
-    def run(self):
-        if randint(0, 10) % 5 == 0:
+    def run(self, cursor):
+        if randint(0, 100) % 10 == 0:
             raise Exception("I FAILED")
         time.sleep(randint(0, 10))
-        self._state = State.COMPLETE
+        self.set_state(cursor, TaskState.COMPLETE)
         pass
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, cursor):
         try:
-            self._state = State.EXECUTING
-            self.run()
+            self.set_state(cursor, TaskState.EXECUTING)
+            self.run(cursor)
             return self
         except Exception as e:
-            self._state = State.FAILED
+            self.set_state(cursor, TaskState.FAILED)
             raise ExecutionException(self, e)
 
     def __str__(self):
@@ -49,6 +44,8 @@ class Task:
         return "{}(id='{}')".format(type(self).__name__, self.id)
 
     def persist(self, cursor, cluster_id):
+        if self.id is not None:
+            raise Exception("This task is already persisted!")
         cursor.execute("""
             INSERT INTO node (type, payload, cluster)
             VALUES (%(type)s, %(payload)s, %(cluster)s) 
@@ -57,14 +54,22 @@ class Task:
         self.id = cursor.fetchone().id
         return self
 
+    def set_state(self, cursor, state):
+        cursor.execute("""
+            UPDATE node
+            SET state = %(state)s
+            WHERE id = %(id)s
+        """, dict(state=state.name, id=self.id))
+        self._state = state
+
     @property
     def runnable(self):
-        if self._state != State.PENDING:
+        if self._state != TaskState.PENDING:
             return False
         elif len(list(self.predecessors())) == 0:
             return True
         else:
-            return all((s.state == State.COMPLETE for s in self.predecessors()))
+            return all((s.state == TaskState.COMPLETE for s in self.predecessors()))
 
     def successors(self):
         return self.graph.successors(self)
@@ -73,19 +78,19 @@ class Task:
         return self.graph.predecessors(self)
 
     def retry_failed(self):
-        self._state = State.PENDING
+        self._state = TaskState.PENDING
 
     def failed(self):
-        return self._state == State.FAILED
+        return self._state == TaskState.FAILED
 
     def running(self):
-        return self._state == State.FAILED
+        return self._state == TaskState.FAILED
 
     def pending(self):
-        return self._state == State.PENDING
+        return self._state == TaskState.PENDING
 
     def complete(self):
-        return self._state == State.COMPLETE
+        return self._state == TaskState.COMPLETE
 
     @property
     def state(self):
