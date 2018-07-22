@@ -1,4 +1,6 @@
+import logging
 import queue
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -6,7 +8,15 @@ from concurrent.futures import ThreadPoolExecutor
 import psycopg2.extras
 
 from exceptions import ExecutionException
-from graph import AWSGraphBuilder, ExecutionGraph, TaskState
+from graph import AWSGraphBuilder, ExecutionGraph, TaskAction, TaskState
+
+log = logging.getLogger(__name__)
+
+log.setLevel(logging.DEBUG)
+ch = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter('%(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+log.addHandler(ch)
 
 connection = psycopg2.connect(dbname='testgraphdb')
 cursor = connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
@@ -21,16 +31,25 @@ builder = AWSGraphBuilder(connection)
 # cluster_id = cursor.fetchone().id
 # print(cluster_id)
 #
-# g = builder.create(cluster_id, num_nodes=3, num_dcs=2)
+# g = builder.create(cluster_id, num_nodes=1, num_dcs=1)
 # connection.commit()
 
-cluster_id = '427a2395-c66f-4872-a369-b5c349dbf8fc'
+cluster_id = '81460476-2727-473a-a7da-375bc69fbe65'
 g = builder.load(cluster_id)
 
 graph = ExecutionGraph(g)
-graph.draw('/tmp/test.jpg')
+# graph.draw('/tmp/test.jpg')
+
+print(graph.root.can_delete)
+
+# print(graph.provisioning_tasks())
+print(graph.deletion_tasks())
 
 result_queue = queue.Queue()
+
+
+def new_cursor():
+    return connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
 
 
 class Worker(threading.Thread):
@@ -45,11 +64,11 @@ class Worker(threading.Thread):
         while not self.stopped():
             try:
                 result = self.queue.get(timeout=1).result()
-                print(result)
+                log.info("Completed task: {}".format(result))
             except queue.Empty:
                 pass
             except ExecutionException as e:
-                print("ERROR: {} - {}".format(e.task, e.exception))
+                log.error("{} - {}".format(e.task, e.exception))
             finally:
                 self.connection.commit()
 
@@ -68,11 +87,18 @@ pool = ThreadPoolExecutor(100)
 worker = Worker(result_queue, connection)
 worker.start()
 
-while not graph.complete():
+while True:
     print(graph.info())
 
-    for task in graph.runnable_tasks():
-        pool.submit(task, connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)).add_done_callback(on_done)
+    provisioning_tasks = graph.provisioning_tasks()
+    deletion_tasks = graph.deletion_tasks()
+
+    if provisioning_tasks:
+        for task in provisioning_tasks:
+            pool.submit(task, new_cursor(), TaskAction.PROVISION).add_done_callback(on_done)
+    elif deletion_tasks:
+        for task in deletion_tasks:
+            pool.submit(task, new_cursor(), TaskAction.DELETE).add_done_callback(on_done)
 
     time.sleep(1)
 

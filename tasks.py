@@ -8,30 +8,49 @@ from exceptions import ExecutionException
 
 
 class TaskState(Enum):
-    PENDING = 'PENDING'
-    EXECUTING = 'EXECUTING'
-    COMPLETE = 'COMPLETE'
+    PENDING_PROVISION = 'PENDING_PROVISION'
+    PROVISIONING = 'PROVISIONING'
+    PROVISIONED = 'PROVISIONED'
+    PENDING_DELETION = 'PENDING_DELETION'
+    DELETING = 'DELETING'
+    DELETED = 'DELETED'
     FAILED = 'FAILED'
+
+
+class TaskAction(Enum):
+    DELETE = 'DELETE'
+    PROVISION = 'PROVISION'
 
 
 class Task:
     def __init__(self, graph, task_id=None, task_state=None):
         self.graph = graph
         self.id = task_id
-        self._state = TaskState(task_state) or TaskState.PENDING
+        self._state = TaskState(task_state) if task_state else TaskState.PENDING_PROVISION
 
     @abstractmethod
-    def run(self, cursor):
+    def provision(self, cursor):
         if randint(0, 100) % 10 == 0:
             raise Exception("I FAILED")
         time.sleep(randint(0, 10))
-        self.set_state(cursor, TaskState.COMPLETE)
+        self.set_state(cursor, TaskState.PROVISIONED)
         pass
 
-    def __call__(self, cursor):
+    @abstractmethod
+    def delete(self, cursor):
+        time.sleep(randint(0, 1))
+        self.set_state(cursor, TaskState.DELETED)
+
+    def __call__(self, cursor, action):
         try:
-            self.set_state(cursor, TaskState.EXECUTING)
-            self.run(cursor)
+            if action == TaskAction.PROVISION:
+                self.set_state(cursor, TaskState.PROVISIONING)
+                self.provision(cursor)
+            elif action == TaskAction.DELETE:
+                self.set_state(cursor, TaskState.DELETING)
+                self.delete(cursor)
+            else:
+                raise Exception("Invalid task action: {}".format(action))
             return self
         except Exception as e:
             self.set_state(cursor, TaskState.FAILED)
@@ -41,7 +60,7 @@ class Task:
         return repr(self)
 
     def __repr__(self):
-        return "{}(id='{}')".format(type(self).__name__, self.id)
+        return "{}(id='{}', state='{}')".format(type(self).__name__, self.id, str(self.state))
 
     def persist(self, cursor, cluster_id):
         if self.id is not None:
@@ -63,13 +82,23 @@ class Task:
         self._state = state
 
     @property
-    def runnable(self):
-        if self._state != TaskState.PENDING:
+    def can_provision(self):
+        if self._state != TaskState.PENDING_PROVISION:
             return False
         elif len(list(self.predecessors())) == 0:
             return True
         else:
-            return all((s.state == TaskState.COMPLETE for s in self.predecessors()))
+            return all((s.state == TaskState.PROVISIONED for s in self.predecessors()))
+
+    @property
+    def can_delete(self):
+        if self._state != TaskState.PENDING_DELETION:
+            return False
+        elif len(list(self.successors())) == 0:
+            return True
+        elif all((s.state == TaskState.DELETED for s in self.successors())):
+            return True
+        return False
 
     def successors(self):
         return self.graph.successors(self)
@@ -78,19 +107,7 @@ class Task:
         return self.graph.predecessors(self)
 
     def retry_failed(self):
-        self._state = TaskState.PENDING
-
-    def failed(self):
-        return self._state == TaskState.FAILED
-
-    def running(self):
-        return self._state == TaskState.FAILED
-
-    def pending(self):
-        return self._state == TaskState.PENDING
-
-    def complete(self):
-        return self._state == TaskState.COMPLETE
+        self._state = TaskState.PENDING_PROVISION
 
     @property
     def state(self):

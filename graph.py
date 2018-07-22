@@ -42,7 +42,7 @@ class GraphBuilder:
         node_map = dict()
         for row in list(self.cursor):
             node = type_map[row.type](graph=task_graph, task_id=row.id, task_state=row.state)
-            if node.state == TaskState.EXECUTING:
+            if node.state == TaskState.PROVISIONING:
                 log.warning("Node: {} was in the EXECUTING state on load, setting to FAILED".format(node))
                 node.set_state(self.cursor, TaskState.FAILED)
             node_map[node.id] = node
@@ -139,24 +139,31 @@ class ExecutionGraph:
     def build(self, num_nodes: int, num_dcs: int) -> Tuple[nx.DiGraph, Task]:
         pass
 
-    def runnable_tasks(self):
-        return self._gather_runnable(self.root)
+    def provisioning_tasks(self):
+        return self._gather_provisioning_tasks(self.root)
 
-    def _gather_runnable(self, root):
-        runnable = set()
-        if root.runnable:
-            runnable.add(root)
+    def deletion_tasks(self):
+        return self._gather_deletion_tasks(self.root)
+
+    def _gather_deletion_tasks(self, root, depth=0):
+        tasks = set()
+        if root.can_delete:
+            tasks.add(root)
+        for node in nx.descendants(self.graph, root):
+            if node.can_delete:
+                tasks.add(node)
+            tasks.update(self._gather_deletion_tasks(node, depth+1))
+        return tasks
+
+    def _gather_provisioning_tasks(self, root):
+        tasks = set()
+        if root.can_provision:
+            tasks.add(root)
         for node in self.graph.successors(root):
-            if node.runnable:
-                runnable.add(node)
-            runnable.update(self._gather_runnable(node))
-        return runnable
-
-    def complete(self):
-        for node in self.graph.nodes():
-            if not node.complete():
-                return False
-        return True
+            if node.can_provision:
+                tasks.add(node)
+            tasks.update(self._gather_provisioning_tasks(node))
+        return tasks
 
     def nodes_for_state(self, state):
         nodes = []
@@ -166,15 +173,15 @@ class ExecutionGraph:
         return nodes
 
     def info(self):
-        pending = len(self.nodes_for_state(TaskState.PENDING))
+        pending = len(self.nodes_for_state(TaskState.PENDING_PROVISION))
         failed = len(self.nodes_for_state(TaskState.FAILED))
-        complete = len(self.nodes_for_state(TaskState.COMPLETE))
-        excecuting = len(self.nodes_for_state(TaskState.EXECUTING))
-        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}, Excecuting: {}" \
-            .format(self.percent_complete(), pending, failed, complete, excecuting)
+        complete = len(self.nodes_for_state(TaskState.PROVISIONED))
+        executing = len(self.nodes_for_state(TaskState.PROVISIONING))
+        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}, Executing: {}" \
+            .format(self.percent_complete(), pending, failed, complete, executing)
 
     def percent_complete(self):
-        return len(self.nodes_for_state(TaskState.COMPLETE)) * 100 / len(self.graph)
+        return len(self.nodes_for_state(TaskState.PROVISIONED)) * 100 / len(self.graph)
 
     def draw(self, path):
         agraph = nx.nx_agraph.to_agraph(self.graph)
