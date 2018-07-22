@@ -1,15 +1,22 @@
 import queue
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
-from graph import AWSGraph
-from tasks import *
+import psycopg2.extras
 
-pool = ThreadPoolExecutor(100)
+from graph import GraphBuilder, Graph, State
+from tasks import ExecutionException
 
-task_graph = AWSGraph(3, 2)
+connection = psycopg2.connect(dbname='testgraphdb')
+cursor = connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
+builder = GraphBuilder(connection)
 
-task_graph.draw('/tmp/test-cluster.jpg')
+g = builder.load('25af73ae-ec37-4b59-9fed-c3e0f71d4a6e')
+
+graph = Graph(g)
+
+graph.draw('/tmp/test.jpg')
 
 result_queue = queue.Queue()
 
@@ -43,18 +50,19 @@ def on_done(future):
     result_queue.put(future)
 
 
+pool = ThreadPoolExecutor(100)
 worker = Worker(result_queue)
 worker.start()
 
-while not task_graph.complete():
-    print(task_graph.percent_complete(), end=' ')
-    task_graph.info()
-    for task in task_graph.runnable_tasks():
+while not graph.complete():
+    print(graph.info())
+
+    for task in graph.runnable_tasks():
         pool.submit(task).add_done_callback(on_done)
 
     time.sleep(1)
 
-    for failed_node in task_graph.nodes_for_state(State.FAILED):
-        failed_node.reset_failed()
+    for failed_node in graph.nodes_for_state(State.FAILED):
+        failed_node.retry_failed()
 
 worker.stop()

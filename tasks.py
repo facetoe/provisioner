@@ -1,3 +1,4 @@
+import json
 import time
 from abc import abstractmethod
 from enum import Enum
@@ -19,38 +20,46 @@ class State(Enum):
 
 
 class Task:
-    def __init__(self, graph):
+    def __init__(self, graph, task_id=None):
         self.graph = graph
-        self.id = "{}-{}".format(type(self).__name__, id(self))
-        self.state = State.PENDING
+        self.id = task_id
+        self._state = State.PENDING
 
     @abstractmethod
     def run(self):
         if randint(0, 10) % 5 == 0:
             raise Exception("I FAILED")
         time.sleep(randint(0, 10))
-        self.state = State.COMPLETE
+        self._state = State.COMPLETE
         pass
 
     def __call__(self, *args, **kwargs):
         try:
-            self.state = State.EXECUTING
+            self._state = State.EXECUTING
             self.run()
             return self
         except Exception as e:
-            self.state = State.FAILED
+            self._state = State.FAILED
             raise ExecutionException(self, e)
 
     def __str__(self):
-        return self.id
+        return repr(self)
 
     def __repr__(self):
-        return "{}(id='{}', runnable={}, state={})".format(
-            type(self).__name__, self.id, self.runnable, self.state)
+        return "{}(id='{}')".format(type(self).__name__, self.id)
+
+    def persist(self, cursor, cluster_id):
+        cursor.execute("""
+            INSERT INTO node (type, payload, cluster)
+            VALUES (%(type)s, %(payload)s, %(cluster)s) 
+            RETURNING id
+        """, dict(type=type(self).__name__, payload=json.dumps({}), cluster=cluster_id))
+        self.id = cursor.fetchone().id
+        return self
 
     @property
     def runnable(self):
-        if self.state != State.PENDING:
+        if self._state != State.PENDING:
             return False
         elif len(list(self.predecessors())) == 0:
             return True
@@ -63,89 +72,81 @@ class Task:
     def predecessors(self):
         return self.graph.predecessors(self)
 
-    def reset_failed(self):
-        self.state = State.PENDING
+    def retry_failed(self):
+        self._state = State.PENDING
 
     def failed(self):
-        return self.state == State.FAILED
+        return self._state == State.FAILED
 
     def running(self):
-        return self.state == State.FAILED
+        return self._state == State.FAILED
 
     def pending(self):
-        return self.state == State.PENDING
+        return self._state == State.PENDING
+
+    def complete(self):
+        return self._state == State.COMPLETE
+
+    @property
+    def state(self):
+        return self._state
 
 
 class DataCentre(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class Cluster(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class Role(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class VPC(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class SecurityGroups(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class BindSecurityGroup(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class InternetGateway(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class RouteTable(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class SubNets(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class FirewallRules(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class CreateEBS(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class AttachEBS(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class Nodes(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class CreateInstance(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
 
 
 class BindIP(Task):
-    def __init__(self, graph):
-        super().__init__(graph)
+    pass
