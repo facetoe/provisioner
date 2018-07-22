@@ -12,7 +12,15 @@ connection = psycopg2.connect(dbname='testgraphdb')
 cursor = connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
 builder = GraphBuilder(connection)
 
-g = builder.load('25af73ae-ec37-4b59-9fed-c3e0f71d4a6e')
+cursor.execute("""
+    INSERT INTO cluster(name)
+    VALUES ('ass')
+    RETURNING id
+""")
+
+cluster_id = cursor.fetchone().id
+
+g = builder.create(cluster_id, 3, 2)
 
 graph = Graph(g)
 

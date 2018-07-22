@@ -18,11 +18,26 @@ class GraphBuilder:
 
     def load(self, cluster_id):
         task_graph = nx.DiGraph()
-
         node_map = self.build_node_map(cluster_id, task_graph)
         edges = self.get_edges(cluster_id, node_map)
         task_graph.add_edges_from(edges)
         return task_graph
+
+    def build_node_map(self, cluster_id, task_graph):
+        self.cursor.execute("""
+            SELECT *
+            FROM node
+            WHERE cluster = %(cluster)s
+        """, dict(cluster=cluster_id))
+        type_map = dict()
+        for task_type in Task.__subclasses__():
+            type_map[task_type.__name__] = task_type
+
+        node_map = dict()
+        for row in self.cursor:
+            node = type_map[row.type](graph=task_graph, task_id=row.id)
+            node_map[node.id] = node
+        return node_map
 
     def get_edges(self, cluster_id, node_map):
         self.cursor.execute("""
@@ -46,34 +61,22 @@ class GraphBuilder:
             edges.add(Edge(from_node=node_map[row.from_node], to_node=node_map[row.to_node]))
         return edges
 
-    def build_node_map(self, cluster_id, task_graph):
-        self.cursor.execute("""
-            SELECT *
-            FROM node
-            WHERE cluster = %(cluster)s
-        """, dict(cluster=cluster_id))
-        type_map = dict()
-        for clazz in Task.__subclasses__():
-            type_map[clazz.__name__] = clazz
-        node_map = dict()
-        for row in self.cursor:
-            node = type_map[row.type](graph=task_graph, task_id=row.id)
-            node_map[node.id] = node
-        return node_map
-
     def create(self, cluster_id, num_nodes, num_dcs):
         task_graph = nx.DiGraph()
 
-        cluster = Cluster(task_graph).persist(self.cursor, cluster_id)
+        def persisted(task_obj):
+            return task_obj.persist(self.cursor, cluster_id)
+
+        cluster = persisted(Cluster(task_graph))
         for _ in range(num_dcs):
-            dc = DataCentre(task_graph).persist(self.cursor, cluster_id)
-            role = Role(task_graph).persist(self.cursor, cluster_id)
-            vpc = VPC(task_graph).persist(self.cursor, cluster_id)
-            security_groups = SecurityGroups(task_graph).persist(self.cursor, cluster_id)
-            internet_gateway = InternetGateway(task_graph).persist(self.cursor, cluster_id)
-            route_table = RouteTable(task_graph).persist(self.cursor, cluster_id)
-            subnets = SubNets(task_graph).persist(self.cursor, cluster_id)
-            firewall_rules = FirewallRules(task_graph).persist(self.cursor, cluster_id)
+            dc = persisted(DataCentre(task_graph))
+            role = persisted(Role(task_graph))
+            vpc = persisted(VPC(task_graph))
+            security_groups = persisted(SecurityGroups(task_graph))
+            internet_gateway = persisted(InternetGateway(task_graph))
+            route_table = persisted(RouteTable(task_graph))
+            subnets = persisted(SubNets(task_graph))
+            firewall_rules = persisted(FirewallRules(task_graph))
 
             cluster_edges = [
                 Edge(cluster, dc),
@@ -89,17 +92,18 @@ class GraphBuilder:
             ]
 
             for n in range(num_nodes):
-                create_instance = CreateInstance(task_graph).persist(self.cursor, cluster_id)
-                create_ebs = CreateEBS(task_graph).persist(self.cursor, cluster_id)
-                attach_ebs = AttachEBS(task_graph).persist(self.cursor, cluster_id)
-                bind_security_group = BindSecurityGroup(task_graph).persist(self.cursor, cluster_id)
+                create_instance = persisted(CreateInstance(task_graph))
+                create_ebs = persisted(CreateEBS(task_graph))
+                attach_ebs = persisted(AttachEBS(task_graph))
+                bind_security_group = persisted(BindSecurityGroup(task_graph))
+                bind_ip = persisted(BindIP(task_graph))
 
                 cluster_edges.append(Edge(dc, create_instance))
                 cluster_edges.append(Edge(dc, create_ebs))
 
                 cluster_edges.append(Edge(create_ebs, attach_ebs))
                 cluster_edges.append(Edge(create_instance, attach_ebs))
-                cluster_edges.append(Edge(create_instance, BindIP(task_graph).persist(self.cursor, cluster_id)))
+                cluster_edges.append(Edge(create_instance, bind_ip))
 
                 cluster_edges.append(Edge(create_instance, bind_security_group))
                 cluster_edges.append(Edge(security_groups, bind_security_group))
@@ -153,7 +157,8 @@ class Graph:
         pending = len(self.nodes_for_state(State.PENDING))
         failed = len(self.nodes_for_state(State.FAILED))
         complete = len(self.nodes_for_state(State.COMPLETE))
-        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}".format(self.percent_complete(), pending, failed, complete)
+        return "{:.2f}% done:  Pending: {}, Failed: {}, Complete: {}".format(self.percent_complete(), pending, failed,
+                                                                             complete)
 
     def percent_complete(self):
         return len(self.nodes_for_state(State.COMPLETE)) * 100 / len(self.graph)
