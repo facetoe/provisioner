@@ -5,10 +5,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import networkx as nx
 import psycopg2.extras
 
 from exceptions import ExecutionException
-from graph import AWSGraphBuilder, ExecutionGraph, TaskAction, TaskState
+from graph import AWSGraphBuilder, ExecutionGraph
+from tasks import TaskAction, TaskState, CreateInstance
 
 log = logging.getLogger(__name__)
 
@@ -22,28 +24,32 @@ connection = psycopg2.connect(dbname='testgraphdb')
 cursor = connection.cursor(cursor_factory=psycopg2.extras.NamedTupleCursor)
 builder = AWSGraphBuilder(connection)
 
-# cursor.execute("""
-#     INSERT INTO cluster(name)
-#     VALUES ('ass')
-#     RETURNING id
-# """)
-#
-# cluster_id = cursor.fetchone().id
-# print(cluster_id)
-#
-# g = builder.create(cluster_id, num_nodes=1, num_dcs=1)
+# g = builder.create('test cluster', num_nodes=1, num_dcs=1)
 # connection.commit()
-
-cluster_id = '81460476-2727-473a-a7da-375bc69fbe65'
+#
+cluster_id = '2aa9f0e3-84cb-4084-bcf2-f30a47c50dc3'
 g = builder.load(cluster_id)
 
 graph = ExecutionGraph(g)
-# graph.draw('/tmp/test.jpg')
+graph.draw('/tmp/test.jpg')
 
-print(graph.root.can_delete)
+print(graph.info())
+
+import boto3
+
+# Let's use Amazon S3
+ec2 = boto3.resource('ec2')
+
+
+for node in graph.graph.nodes():
+    if type(node) is CreateInstance:
+        print(list(nx.bfs_successors(graph.graph, node)))
+
 
 # print(graph.provisioning_tasks())
-print(graph.deletion_tasks())
+
+
+sys.exit()
 
 result_queue = queue.Queue()
 
@@ -64,7 +70,8 @@ class Worker(threading.Thread):
         while not self.stopped():
             try:
                 result = self.queue.get(timeout=1).result()
-                log.info("Completed task: {}".format(result))
+                if result.state == TaskState.PROVISIONED:
+                    log.info("Completed task: {}".format(result))
             except queue.Empty:
                 pass
             except ExecutionException as e:
@@ -95,14 +102,11 @@ while True:
 
     if provisioning_tasks:
         for task in provisioning_tasks:
-            pool.submit(task, new_cursor(), TaskAction.PROVISION).add_done_callback(on_done)
+            pool.submit(task, new_cursor(), ec2, TaskAction.PROVISION).add_done_callback(on_done)
     elif deletion_tasks:
         for task in deletion_tasks:
             pool.submit(task, new_cursor(), TaskAction.DELETE).add_done_callback(on_done)
 
     time.sleep(1)
-
-    for failed_node in graph.nodes_for_state(TaskState.FAILED):
-        failed_node.retry_failed()
 
 worker.stop()

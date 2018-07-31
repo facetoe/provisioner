@@ -1,5 +1,4 @@
 import logging
-from collections import namedtuple
 from typing import Tuple
 
 import networkx as nx
@@ -43,7 +42,7 @@ class GraphBuilder:
         for row in list(self.cursor):
             node = type_map[row.type](graph=task_graph, task_id=row.id, task_state=row.state)
             if node.state == TaskState.PROVISIONING:
-                log.warning("Node: {} was in the EXECUTING state on load, setting to FAILED".format(node))
+                log.warning("Node: {} was in the PROVISIONING state on load, setting to FAILED".format(node))
                 node.set_state(self.cursor, TaskState.FAILED)
             node_map[node.id] = node
         return node_map
@@ -70,17 +69,46 @@ class GraphBuilder:
             edges.add(Edge(from_node=node_map[row.from_node], to_node=node_map[row.to_node]))
         return edges
 
+    def persist_edges(self, cluster_edges, cluster_id, data_centre_id):
+        for edge in cluster_edges:
+            self.cursor.execute("""
+                    INSERT INTO edge (from_node, to_node, cluster, data_centre)
+                    VALUES (%(from_node)s, %(to_node)s, %(cluster)s, %(data_centre)s)
+                """, dict(from_node=edge.from_node.id,
+                          to_node=edge.to_node.id,
+                          cluster=cluster_id,
+                          data_centre=data_centre_id))
+
+    def create_datacentre(self, cluster_id):
+        self.cursor.execute("""
+            INSERT INTO data_centre (cluster)
+            VALUES (%(cluster)s)
+            RETURNING id
+        """, dict(cluster=cluster_id))
+        return self.cursor.fetchone().id
+
+    def create_cluster(self, cluster_name):
+        self.cursor.execute("""
+            INSERT INTO cluster(name)
+            VALUES (%(name)s)
+            RETURNING id
+        """, dict(name=cluster_name))
+        return self.cursor.fetchone().id
+
 
 class AWSGraphBuilder(GraphBuilder):
 
-    def create(self, cluster_id, num_nodes, num_dcs):
+    def create(self, cluster_name, num_nodes, num_dcs):
         task_graph = nx.DiGraph()
 
-        def persisted(task_obj):
-            return task_obj.persist(self.cursor, cluster_id)
-
-        cluster = persisted(Cluster(task_graph))
+        cluster_id = self.create_cluster(cluster_name)
+        cluster = Cluster(task_graph).persist(self.cursor, cluster_id)
         for _ in range(num_dcs):
+            data_centre_id = self.create_datacentre(cluster_id)
+
+            def persisted(task_obj):
+                return task_obj.persist(self.cursor, cluster_id)
+
             dc = persisted(DataCentre(task_graph))
             role = persisted(Role(task_graph))
             vpc = persisted(VPC(task_graph))
@@ -90,18 +118,18 @@ class AWSGraphBuilder(GraphBuilder):
             subnets = persisted(SubNets(task_graph))
             firewall_rules = persisted(FirewallRules(task_graph))
 
-            cluster_edges = [
+            cluster_edges = {
                 Edge(cluster, dc),
                 Edge(dc, role),
                 Edge(dc, vpc),
                 Edge(vpc, security_groups),
                 Edge(vpc, internet_gateway),
                 Edge(vpc, route_table),
-                Edge(internet_gateway, route_table),
                 Edge(vpc, subnets),
-                Edge(vpc, security_groups),
+                Edge(internet_gateway, route_table),
+                Edge(route_table, subnets),
                 Edge(security_groups, firewall_rules),
-            ]
+            }
 
             for n in range(num_nodes):
                 create_instance = persisted(CreateInstance(task_graph))
@@ -110,23 +138,17 @@ class AWSGraphBuilder(GraphBuilder):
                 bind_security_group = persisted(BindSecurityGroup(task_graph))
                 bind_ip = persisted(BindIP(task_graph))
 
-                cluster_edges.append(Edge(dc, create_instance))
-                cluster_edges.append(Edge(dc, create_ebs))
+                cluster_edges.add(Edge(dc, create_ebs))
+                cluster_edges.add(Edge(create_ebs, create_instance))
 
-                cluster_edges.append(Edge(create_ebs, attach_ebs))
-                cluster_edges.append(Edge(create_instance, attach_ebs))
-                cluster_edges.append(Edge(create_instance, bind_ip))
+                cluster_edges.add(Edge(create_instance, attach_ebs))
+                cluster_edges.add(Edge(create_instance, bind_ip))
 
-                cluster_edges.append(Edge(create_instance, bind_security_group))
-                cluster_edges.append(Edge(security_groups, bind_security_group))
+                cluster_edges.add(Edge(create_instance, bind_security_group))
+                cluster_edges.add(Edge(security_groups, bind_security_group))
 
             task_graph.add_edges_from(cluster_edges)
-
-            for edge in cluster_edges:
-                self.cursor.execute("""
-                    INSERT INTO edge (from_node, to_node, cluster)
-                    VALUES (%(from_node)s, %(to_node)s, %(cluster)s)
-                """, dict(from_node=edge.from_node.id, to_node=edge.to_node.id, cluster=cluster_id))
+            self.persist_edges(cluster_edges, cluster_id, data_centre_id)
             return task_graph
 
 
@@ -138,32 +160,6 @@ class ExecutionGraph:
     @abstractmethod
     def build(self, num_nodes: int, num_dcs: int) -> Tuple[nx.DiGraph, Task]:
         pass
-
-    def provisioning_tasks(self):
-        return self._gather_provisioning_tasks(self.root)
-
-    def deletion_tasks(self):
-        return self._gather_deletion_tasks(self.root)
-
-    def _gather_deletion_tasks(self, root, depth=0):
-        tasks = set()
-        if root.can_delete:
-            tasks.add(root)
-        for node in nx.descendants(self.graph, root):
-            if node.can_delete:
-                tasks.add(node)
-            tasks.update(self._gather_deletion_tasks(node, depth+1))
-        return tasks
-
-    def _gather_provisioning_tasks(self, root):
-        tasks = set()
-        if root.can_provision:
-            tasks.add(root)
-        for node in self.graph.successors(root):
-            if node.can_provision:
-                tasks.add(node)
-            tasks.update(self._gather_provisioning_tasks(node))
-        return tasks
 
     def nodes_for_state(self, state):
         nodes = []
@@ -187,3 +183,29 @@ class ExecutionGraph:
         agraph = nx.nx_agraph.to_agraph(self.graph)
         agraph.layout('dot', args='-Nfontsize=10 -Nwidth=".2" -Nheight=".2" -Nmargin=0 -Gfontsize=8')
         agraph.draw(path)
+
+    def provisioning_tasks(self):
+        return self._gather_provisioning_tasks(self.root)
+
+    def deletion_tasks(self):
+        return self._gather_deletion_tasks(self.root)
+
+    def _gather_deletion_tasks(self, root, depth=0):
+        tasks = set()
+        if root.can_delete:
+            tasks.add(root)
+        for node in nx.descendants(self.graph, root):
+            if node.can_delete:
+                tasks.add(node)
+            tasks.update(self._gather_deletion_tasks(node, depth + 1))
+        return tasks
+
+    def _gather_provisioning_tasks(self, root):
+        tasks = set()
+        if root.can_provision:
+            tasks.add(root)
+        for node in self.graph.successors(root):
+            if node.can_provision:
+                tasks.add(node)
+            tasks.update(self._gather_provisioning_tasks(node))
+        return tasks
